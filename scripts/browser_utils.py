@@ -25,6 +25,11 @@ class BrowserFactory:
         Launch a persistent browser context with anti-detection features
         and cookie workaround.
         """
+        # When headless, add explicit Chrome flags so Chrome is truly invisible
+        # on macOS (no Dock icon, no window). Auth setup intentionally passes
+        # headless=False so the user can interact with the Google login page.
+        extra_args = ['--headless=new', '--disable-gpu'] if headless else []
+
         # Launch persistent context
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
@@ -33,7 +38,7 @@ class BrowserFactory:
             no_viewport=True,
             ignore_default_args=["--enable-automation"],
             user_agent=USER_AGENT,
-            args=BROWSER_ARGS
+            args=BROWSER_ARGS + extra_args
         )
 
         # Cookie Workaround for Playwright bug #36139
