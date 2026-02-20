@@ -74,7 +74,7 @@ mkdir -p ~/.claude/skills
 
 # 2. Clone this repository
 cd ~/.claude/skills
-git clone https://github.com/PleasePrompto/notebooklm-skill notebooklm
+git clone https://github.com/michaelcarwile/claude-skill-notebooklm notebooklm
 
 # 3. That's it! Open Claude Code and say:
 "What are my skills?"
@@ -161,13 +161,15 @@ This is a **Claude Code Skill** - a local folder containing instructions and scr
 
 ```
 ~/.claude/skills/notebooklm/
-├── SKILL.md              # Instructions for Claude
-├── scripts/              # Python automation scripts
-│   ├── ask_question.py   # Query NotebookLM
-│   ├── notebook_manager.py # Library management
-│   └── auth_manager.py   # Google authentication
-├── .venv/                # Isolated Python environment (auto-created)
-└── data/                 # Local notebook library
+├── SKILL.md                  # Instructions for Claude
+├── scripts/                  # Python automation scripts
+│   ├── ask_question.py       # Query NotebookLM
+│   ├── notebook_manager.py   # Library management
+│   ├── auth_manager.py       # Google authentication
+│   ├── discover_notebooks.py # Sync all notebooks from home page
+│   └── get_titles.py         # Verify notebook titles against library
+├── .venv/                    # Isolated Python environment (auto-created)
+└── data/                     # Local notebook library
 ```
 
 When you mention NotebookLM or send a notebook URL, Claude:
@@ -250,11 +252,12 @@ Uses realistic typing speeds and interaction patterns to avoid detection.
 - **Patchright**: Browser automation library (Playwright-based)
 - **Python**: Implementation language for this skill
 - **Stealth techniques**: Human-like typing and interaction patterns
+- **macOS headless**: Explicitly passes `--headless=new --disable-gpu` to Chrome so the browser stays truly invisible (no Dock icon). Auth setup intentionally opens visibly for Google login.
 
 Note: The MCP server uses the same Patchright library but via TypeScript/npm ecosystem.
 
 ### Dependencies
-- **patchright==1.55.2**: Browser automation
+- **patchright==1.58.0**: Browser automation
 - **python-dotenv==1.0.0**: Environment configuration
 - Automatically installed in `.venv` on first use
 
@@ -397,7 +400,7 @@ Stop the copy-paste dance. Start getting accurate, grounded answers directly in 
 ```bash
 # Get started in 30 seconds
 cd ~/.claude/skills
-git clone https://github.com/PleasePrompto/notebooklm-skill notebooklm
+git clone https://github.com/michaelcarwile/claude-skill-notebooklm notebooklm
 # Open Claude Code: "What are my skills?"
 ```
 
