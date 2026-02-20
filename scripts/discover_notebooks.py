@@ -10,6 +10,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from browser_utils import BrowserFactory
 
+_SWITCH_TO_LIST_VIEW_JS = """() => {
+    const icons = document.querySelectorAll('mat-icon');
+    for (const icon of icons) {
+        if (icon.textContent.trim() === 'view_headline') {
+            icon.closest('button') ? icon.closest('button').click() : icon.click();
+            return true;
+        }
+    }
+    return false;
+}"""
+
+
+def _switch_to_list_view(page):
+    """Click the list-view toggle if the page is in grid/card view. Returns True if switched."""
+    switched = page.evaluate(_SWITCH_TO_LIST_VIEW_JS)
+    if switched:
+        print("  🔀 Switched to list view")
+        time.sleep(3)
+    return switched
+
 LIBRARY_PATH = Path(__file__).parent.parent / "data" / "library.json"
 NOTEBOOKLM_HOME = "https://notebooklm.google.com/"
 
@@ -82,9 +102,13 @@ def discover_notebooks(playwright, headless=True):
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(NOTEBOOKLM_HOME, wait_until="domcontentloaded", timeout=60000)
 
+        # Switch to list/table view if in grid/card view — script expects project-table UI
+        time.sleep(5)
+        _switch_to_list_view(page)
+
         # Wait for Angular SPA to hydrate — look for project-table rows
         row_count = 0
-        for attempt in range(4):
+        for attempt in range(6):
             time.sleep(5)
             row_count = page.evaluate("""() => {
                 return document.querySelectorAll('project-table tr td, table tr td').length;
@@ -96,7 +120,7 @@ def discover_notebooks(playwright, headless=True):
         if row_count == 0:
             return []
 
-        # Extract titles and metadata from table rows first
+        # Extract titles and metadata from table rows
         row_data = page.evaluate("""() => {
             const results = [];
             const rows = document.querySelectorAll('project-table tr, table tr');
@@ -153,7 +177,9 @@ def discover_notebooks(playwright, headless=True):
 
             # Navigate back to home page fresh each time
             page.goto(NOTEBOOKLM_HOME, wait_until="domcontentloaded", timeout=60000)
-            # Wait for table to fully re-render with all rows
+            # Re-switch to list view and wait for table to fully re-render
+            time.sleep(3)
+            _switch_to_list_view(page)
             for wait_attempt in range(10):
                 time.sleep(3)
                 current_rows = page.evaluate("""() => {
