@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Discover all notebooks from the NotebookLM home page."""
 import json
+import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -10,6 +12,67 @@ from browser_utils import BrowserFactory
 
 LIBRARY_PATH = Path(__file__).parent.parent / "data" / "library.json"
 NOTEBOOKLM_HOME = "https://notebooklm.google.com/"
+
+ENRICH_QUESTION = (
+    "What is the content of this notebook? What topics are covered? "
+    "Provide a complete overview briefly and concisely"
+)
+
+
+def clean_response(text):
+    """Strip citation numbers and the follow-up reminder from NotebookLM responses."""
+    # Remove citation markers like [1], [2]..., 12, 34..., etc.
+    text = re.sub(r'\d{1,3}\.{3,}', '', text)
+    text = re.sub(r'\[\d+\]', '', text)
+    text = re.sub(r'(?<!\d)\d{1,2}(?!\d)', '', text)
+    # Remove the follow-up reminder block
+    text = re.sub(r'EXTREMELY IMPORTANT:.*', '', text, flags=re.DOTALL)
+    return text.strip()
+
+
+def extract_description(raw_answer):
+    """Extract a concise description from the NotebookLM response."""
+    cleaned = clean_response(raw_answer)
+    # Take first paragraph (up to first double newline or ~500 chars)
+    paragraphs = cleaned.split('\n\n')
+    desc = paragraphs[0].strip() if paragraphs else cleaned[:500]
+    # If too long, truncate at last sentence boundary under 500 chars
+    if len(desc) > 500:
+        truncated = desc[:500]
+        last_period = truncated.rfind('.')
+        if last_period > 200:
+            desc = truncated[:last_period + 1]
+        else:
+            desc = truncated + '...'
+    return desc
+
+
+def extract_topics(raw_answer):
+    """Extract topic keywords from bullet-pointed NotebookLM response."""
+    cleaned = clean_response(raw_answer)
+    topics = []
+
+    # Look for bullet-point headers: "• Topic Name:" or "- Topic Name:"
+    header_pattern = re.compile(r'[•\-\*]\s+\*{0,2}(.+?)\*{0,2}\s*:')
+    for match in header_pattern.finditer(cleaned):
+        topic = match.group(1).strip().strip('*').strip()
+        if 3 < len(topic) < 80:
+            # Convert to slug format
+            slug = topic.lower().replace(' ', '-').replace('/', '-')
+            slug = re.sub(r'[^a-z0-9\-]', '', slug)
+            slug = re.sub(r'-+', '-', slug).strip('-')
+            if slug and len(slug) > 2:
+                topics.append(slug)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for t in topics:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+
+    return unique[:15]  # Cap at 15 topics
 
 
 def discover_notebooks(playwright, headless=True):
@@ -105,9 +168,60 @@ def discover_notebooks(playwright, headless=True):
         context.close()
 
 
+def enrich_notebooks(library, notebook_slugs, show_browser=False):
+    """Query each notebook for content summary and populate description/topics."""
+    from ask_question import ask_notebooklm
+
+    enriched = 0
+    total = len(notebook_slugs)
+
+    for i, slug in enumerate(notebook_slugs):
+        nb = library["notebooks"][slug]
+        url = nb["url"]
+        name = nb["name"]
+
+        print(f"\n  📖 [{i+1}/{total}] Enriching: {name}")
+        print(f"     URL: {url}")
+
+        try:
+            raw_answer = ask_notebooklm(
+                question=ENRICH_QUESTION,
+                notebook_url=url,
+                headless=not show_browser
+            )
+
+            if raw_answer:
+                description = extract_description(raw_answer)
+                topics = extract_topics(raw_answer)
+
+                nb["description"] = description
+                if topics:
+                    nb["topics"] = topics
+                nb["updated_at"] = datetime.now().isoformat()
+
+                print(f"     ✅ Description: {description[:100]}...")
+                print(f"     ✅ Topics: {', '.join(topics[:5])}{'...' if len(topics) > 5 else ''}")
+                enriched += 1
+            else:
+                print(f"     ⚠️  No answer received — skipping")
+        except Exception as e:
+            print(f"     ❌ Error: {e}")
+
+        time.sleep(2)  # Brief pause between notebooks
+
+    # Save library
+    library["updated_at"] = datetime.now().isoformat()
+    with open(LIBRARY_PATH, "w") as f:
+        json.dump(library, f, indent=2)
+
+    print(f"\n💾 Enriched {enriched}/{total} notebooks. Library saved.")
+    return enriched
+
+
 def main():
     show_browser = "--show-browser" in sys.argv
     sync = "--sync" in sys.argv
+    enrich_flag = "--enrich" in sys.argv
 
     from patchright.sync_api import sync_playwright
 
@@ -134,7 +248,8 @@ def main():
 
     existing_urls = {nb["url"] for nb in library["notebooks"].values()}
 
-    new_notebooks = [nb for nb in notebooks if nb["url"] not in existing_urls]
+    new_notebooks = [nb for nb in notebooks if nb.get("url") and nb["url"] not in existing_urls]
+    new_slugs = []
 
     if new_notebooks:
         print(f"\n📋 {len(new_notebooks)} NEW notebook(s) not in library:")
@@ -143,11 +258,9 @@ def main():
 
         if sync:
             print("\n⏳ Adding new notebooks to library...")
-            from datetime import datetime
             for nb in new_notebooks:
                 slug = nb["title"].lower().strip()
                 slug = slug.replace(" ", "-").replace("&", "&")
-                # Remove consecutive dashes
                 while "--" in slug:
                     slug = slug.replace("--", "-")
                 slug = slug.strip("-")
@@ -166,17 +279,38 @@ def main():
                     "use_count": 0,
                     "last_used": None
                 }
+                new_slugs.append(slug)
                 print(f"  ✅ Added: {nb['title']}")
 
             library["updated_at"] = datetime.now().isoformat()
             with open(LIBRARY_PATH, "w") as f:
                 json.dump(library, f, indent=2)
             print(f"\n💾 Library saved with {len(library['notebooks'])} total notebooks.")
-            print("   ⚠️  New notebooks have empty descriptions — use Smart Add to enrich them.")
         else:
             print("\n   Run with --sync to auto-add them to your library.")
     else:
         print("\n✅ All discovered notebooks are already in your library.")
+
+    # Find all notebooks that need enrichment (empty description)
+    unenriched = [
+        slug for slug, nb in library["notebooks"].items()
+        if not nb.get("description") and nb.get("url")
+    ]
+
+    # Determine whether to enrich
+    should_enrich = False
+    if enrich_flag:
+        should_enrich = True
+    elif unenriched and sync:
+        print(f"\n🔎 {len(unenriched)} notebook(s) have empty descriptions.")
+        response = input("   Enrich them with NotebookLM summaries? (y/n): ").strip().lower()
+        should_enrich = response in ("y", "yes")
+
+    if should_enrich and unenriched:
+        print(f"\n🧠 Enriching {len(unenriched)} notebook(s)...\n")
+        enrich_notebooks(library, unenriched, show_browser=show_browser)
+    elif should_enrich and not unenriched:
+        print("\n✅ All notebooks already have descriptions.")
 
     # Output JSON for programmatic use
     print("\n---JSON---")
