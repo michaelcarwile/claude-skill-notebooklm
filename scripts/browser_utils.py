@@ -4,8 +4,10 @@ Handles browser launching, stealth features, and common interactions
 """
 
 import json
+import os
 import time
 import random
+from pathlib import Path
 from typing import Optional, List
 
 from patchright.sync_api import Playwright, BrowserContext, Page
@@ -25,6 +27,9 @@ class BrowserFactory:
         Launch a persistent browser context with anti-detection features
         and cookie workaround.
         """
+        # Auto-clean stale SingletonLock before launching
+        BrowserFactory._clean_stale_lock(user_data_dir)
+
         # When headless, add explicit Chrome flags so Chrome is truly invisible
         # on macOS (no Dock icon, no window). Auth setup intentionally passes
         # headless=False so the user can interact with the Google login page.
@@ -46,6 +51,27 @@ class BrowserFactory:
         BrowserFactory._inject_cookies(context)
 
         return context
+
+    @staticmethod
+    def _clean_stale_lock(user_data_dir: str):
+        """Remove SingletonLock if the owning process is dead."""
+        lock_path = Path(user_data_dir) / "SingletonLock"
+        if not lock_path.exists() and not lock_path.is_symlink():
+            return
+        try:
+            target = os.readlink(str(lock_path))
+            # Format is "hostname-pid"
+            pid_str = target.rsplit("-", 1)[-1]
+            pid = int(pid_str)
+            # Check if process is alive
+            os.kill(pid, 0)
+        except (OSError, ValueError, IndexError):
+            # Process is dead or link is unreadable — safe to remove
+            try:
+                lock_path.unlink()
+                print("  🔓 Removed stale SingletonLock")
+            except OSError:
+                pass
 
     @staticmethod
     def _inject_cookies(context: BrowserContext):
